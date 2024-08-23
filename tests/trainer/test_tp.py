@@ -11,6 +11,7 @@ from composer.utils import dist
 from tests.common import (
     RandomClassificationDataset,
     SimpleComposerMLP,
+    SimpleDataset,
     SimpleModel,
     world_size,
 )
@@ -130,18 +131,18 @@ def test_tp_with_subset_of_params(world_size: int):
 def test_tp_correctness(world_size: int):
     from icecream import ic
 
-    HIDDEN_DIM = 32 # the number of features in a single example
+    HIDDEN_DIM = 2048 # the number of features in a single example
+    OUTPUT_DIM = 10 # the number of classes
     BATCH_DIM = 2 # number of examples in a single batch on a single GPU
-    OUTPUT_DIM = 2 # the number of classes
-    SIZE = 32 # the size of the entire dataset, i.e. n_samples
+    NUM_SAMPLES = 32 # the size of the entire dataset
 
-    def _helper(num_features=32, num_classes=2, batch_size=2, size=32):
-        model = SimpleComposerMLP(num_features=num_features, device='cpu', num_classes=num_classes)
-        dataset = RandomClassificationDataset(size=size, num_classes=num_classes)
+    def _helper(hidden_dim: int, output_dim: int, batch_size: int, num_samples: int):
+        model = SimpleComposerMLP(num_features=hidden_dim, device='cpu', num_classes=output_dim)
+        dataset = SimpleDataset(size=num_samples, batch_size=batch_size, feature_size=hidden_dim, num_classes=output_dim)
         dataloader = DataLoader(dataset, batch_size=batch_size, sampler=dist.get_sampler(dataset))
         return model, dataloader
 
-    model, dataloader = _helper(num_features=HIDDEN_DIM, num_classes=OUTPUT_DIM, batch_size=BATCH_DIM, size=SIZE)
+    model, dataloader = _helper(hidden_dim=HIDDEN_DIM, output_dim=OUTPUT_DIM, batch_size=BATCH_DIM, num_samples=NUM_SAMPLES)
     trainer = Trainer(model=model)
     outputs = trainer.predict(dataloader)
     ic(outputs)
