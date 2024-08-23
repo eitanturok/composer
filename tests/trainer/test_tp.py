@@ -10,6 +10,7 @@ from composer.trainer.trainer import Trainer
 from composer.utils import dist
 from tests.common import (
     RandomClassificationDataset,
+    SimpleComposerMLP,
     SimpleModel,
     world_size,
 )
@@ -120,3 +121,34 @@ def test_tp_with_subset_of_params(world_size: int):
             },
             max_duration='3ba',
         )
+
+
+@pytest.mark.gpu
+@world_size(8)
+@pytest.mark.skipif(version.parse(torch.__version__) < version.parse('2.3'), reason='requires PyTorch 2.3+')
+@pytest.mark.filterwarnings(r'ignore:.*\(TP\) is experimental.*:FutureWarning')
+def test_tp_correctness(world_size: int):
+    from icecream import ic
+
+    HIDDEN_DIM = 32 # the number of features in a single example
+    BATCH_DIM = 2 # number of examples in a single batch on a single GPU
+    OUTPUT_DIM = 2 # the number of classes
+    SIZE = 32 # the size of the entire dataset, i.e. n_samples
+
+    def _helper(num_features=32, num_classes=2, batch_size=2, size=32):
+        model = SimpleComposerMLP(num_features=num_features, device='cpu', num_classes=num_classes)
+        dataset = RandomClassificationDataset(size=size, num_classes=num_classes)
+        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=dist.get_sampler(dataset))
+        return model, dataloader
+
+    model, dataloader = _helper(num_features=HIDDEN_DIM, num_classes=OUTPUT_DIM, batch_size=BATCH_DIM, size=SIZE)
+    trainer = Trainer(model=model)
+    outputs = trainer.predict(dataloader)
+    ic(outputs)
+
+    # model, dataloader = _helper()
+    # trainer = Trainer(model=model)
+    # outputs = trainer.predict(dataloader)
+    # ic(outputs)
+
+
