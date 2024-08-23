@@ -169,7 +169,7 @@ def test_tp_correctness(world_size: int):
 
     # forward pass with FSDP and TP
     layer_plan = {'fc1': ColwiseParallel(), 'fc2': RowwiseParallel()}
-    tp_config = {'layer_plan': layer_plan, 'tensor_parallel_degree': 2},
+    tp_config = {'layer_plan': layer_plan, 'tensor_parallel_degree': 2}
     model_fsdp_tp, dataloader_fsdp_tp = _helper(hidden_dim=HIDDEN_DIM, output_dim=OUTPUT_DIM, batch_size=BATCH_DIM, num_samples=NUM_SAMPLES)
     trainer_fsdp_tp = Trainer(
         seed=SEED,
@@ -181,9 +181,9 @@ def test_tp_correctness(world_size: int):
     outputs_fsdp_tp = torch.stack(trainer_fsdp_tp.predict(dataloader_fsdp_tp))
 
     # match shape
-    assert torch.all(outputs.shape == outputs_fsdp.shape)
-    assert torch.all(outputs.shape == outputs_fsdp_tp.shape)
+    assert outputs.shape == outputs_fsdp.shape
+    assert outputs.shape == outputs_fsdp_tp.shape
 
-    # match values
+    # match elements
     assert torch.allclose(outputs, outputs_fsdp)
     assert torch.allclose(outputs, outputs_fsdp_tp)
