@@ -206,20 +206,22 @@ def _create_device_mesh(
         # Device mesh has correctness issues before torch 2.3.0
         return None
 
-    if fsdp_config is None:
+    if fsdp_config is None and tp_config is None:
         return None
 
     # Gather dimensions and names for the device mesh
     dims: list[int] = []
     names: list[str] = []
-    if fsdp_config.data_parallel_replicate_degree is not None:
+    if fsdp_config is not None and fsdp_config.data_parallel_replicate_degree is not None:
         dims.append(fsdp_config.data_parallel_replicate_degree)
         names.append(ParallelismType.DATA_PARALLEL_REPLICATE.value)
-    dims.append(fsdp_config.data_parallel_shard_degree)
-    names.append(ParallelismType.DATA_PARALLEL_SHARD.value)
+    if fsdp_config is not None and fsdp_config.data_parallel_shard_degree is not None:
+        dims.append(fsdp_config.data_parallel_shard_degree)
+        names.append(ParallelismType.DATA_PARALLEL_SHARD.value)
     if tp_config is not None:
         dims.append(tp_config.tensor_parallel_degree)
         names.append(ParallelismType.TENSOR_PARALLEL.value)
+    assert len(dims) > 0 and len(names) > 0
 
     # Fill in the unspecified dimensions
     product_of_dims = 1
@@ -600,18 +602,6 @@ class State(Serializable):
             warnings.warn('Tensor parallelism (TP) is experimental and may change in future versions.', FutureWarning)
             if version.parse(torch.__version__.split('.dev')[0]) < version.parse('2.3.0'):
                 raise ValueError('Tensor parallelism (TP) requires torch>=2.3.0.')
-            if self.fsdp_config is None:
-                raise ValueError(
-                    'Tensor parallelism (TP) currently requires FSDP to be enabled. '
-                    "An empty `parallelism_config['fsdp'] = {}` config can be specified to enable "
-                    'FSDP with default settings. Additionally, PyTorch currently errors if FSDP '
-                    'data_parallel_shard_degree is not at least 2.',
-                )
-            if not self.fsdp_config.use_orig_params:
-                raise ValueError(
-                    'Tensor parallelism (TP) currently requires FSDP with use_orig_params=True, '
-                    'which is the default and recommended setting.',
-                )
 
         # Load monolith rank0 only
         if self.load_monolith_rank0_only:
