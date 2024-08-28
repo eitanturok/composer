@@ -1743,7 +1743,7 @@ class Trainer:
         self._original_model = self.state.model
 
         # If using PyTorch DDP, the model must be loaded before it is wrapped with DDP.
-        # If using TP, the model must be wrapped before FSDP.
+        # If using TP, the model must be loaded before it is wrapped with DDP.
         # If using FSDP, the model must be wrapped and then loaded unless loading a monolith
         # checkpoint on rank 0 only, in which case the model be loaded before it is wrapped.
         # If using DeepSpeed, the engine must be initialized before the model is loaded.
