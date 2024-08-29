@@ -1967,7 +1967,7 @@ class Trainer:
         reproducibility.seed_all(self.state.seed)
 
         # DDP wrap if required
-        if not self.state.deepspeed_enabled and not self.state.fsdp_enabled and dist.get_world_size() > 1:
+        if not self.state.deepspeed_enabled and not self.state.fsdp_enabled and not self.state.tp_enabled and dist.get_world_size() > 1:
             self.state.model = prepare_ddp_module(self.state.model, self._find_unused_parameters)
 
         # The model would need to be torch.compile()'d after being wrapped in a distributed strategy

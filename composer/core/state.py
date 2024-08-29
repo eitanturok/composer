@@ -870,6 +870,11 @@ class State(Serializable):
         return self.deepspeed_config is not None
 
     @property
+    def tp_enabled(self):
+        """Indicates if tensor parallelism is enabled."""
+        return self.tp_config is not None
+
+    @property
     def fsdp_enabled(self):
         """Indicates if FSDP is enabled."""
         for module in self.model.modules():
