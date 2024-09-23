@@ -31,6 +31,7 @@ install()
 
 REPLICATE: bool = False
 
+
 def write_datasets(dataset: Dataset, output_dir: str) -> None:
     from streaming import MDSWriter
     columns = {'x': 'pkl', 'y': 'int64'}
@@ -90,30 +91,38 @@ class RandomClassificationDatasetReplicated(Dataset):
         return self.x[rank_idx], self.y[rank_idx]
 
 
-
-def get_dataloader(num_features: int, num_classes: int, size: int, device: torch.device, batch_size: int, output_dir: str, replication: Optional[int] = None):
+def get_dataloader(
+    num_features: int,
+    num_classes: int,
+    size: int,
+    device: torch.device,
+    batch_size: int,
+    output_dir: str,
+    replication: Optional[int] = None,
+):
     """Create a random classification dataset that supports replication, a key feature needed for tensor parallelism.
 
-    A standard pytorch dataset does not support replication and cannot be properly used with tensor parallelism. We use a streaming dataset to support replication.
+    A standard pytorch dataset does not support replication and cannot be properly used with tensor parallelism.
+    We use a streaming dataset for replication.
     """
 
     from streaming import StreamingDataset
 
     class RandomClassificationStreamingDataset(StreamingDataset):
+
         def __init__(self, local: str, batch_size: int, replication: Optional[int] = None) -> None:
             super().__init__(
                 local=local,
                 batch_size=batch_size,
                 allow_unsafe_types=True,
-                replication=replication
-                )
+                replication=replication,
+            )
 
-        def __getitem__(self, idx:int) -> Any:
+        def __getitem__(self, idx: int) -> Any:
             obj = super().__getitem__(idx)
             x = obj['x']
             y = obj['y']
             return x, y
-
 
     pytorch_dataset = RandomClassificationDataset(
         shape=(num_features,),
@@ -126,9 +135,10 @@ def get_dataloader(num_features: int, num_classes: int, size: int, device: torch
     if dist.get_local_rank() == 0:
         if os.path.isdir(output_dir):
             rmtree(output_dir)
+        reproducibility.seed_all(42)
         write_datasets(pytorch_dataset, output_dir)
 
-    streaming_dataset = RandomClassificationStreamingDataset(
+    streaming_dataset: Dataset = RandomClassificationStreamingDataset(
         local=output_dir,
         replication=replication,
         batch_size=batch_size,
@@ -146,7 +156,7 @@ def get_trainer(
     num_features: int = 2,
     seed: int = 44,
     device: Union[torch.device, str] = 'cuda',
-    replication: int = 0,
+    replication: Optional[int] = None,
 ):
     """Trainer for a simple model with any parallelism_config."""
 
@@ -157,9 +167,21 @@ def get_trainer(
     if REPLICATE:
         ic('yes, replicate')
         output_dir = '/my-tmp/'
-        dataloader = get_dataloader(num_features=num_features, num_classes=num_classes, size=size, device=device, batch_size=batch_size, output_dir=output_dir, replication=replication)
+        dataloader = get_dataloader(
+            num_features=num_features,
+            num_classes=num_classes,
+            size=size,
+            device=device,
+            batch_size=batch_size,
+            output_dir=output_dir,
+            replication=replication,
+        )
+
+        for batch in dataloader:
+            ic(batch)
     else:
         ic('no replicate')
+        assert replication is not None
         dataset: Dataset = RandomClassificationDatasetReplicated(
             shape=(num_features,),
             num_classes=num_classes,
@@ -289,6 +311,7 @@ def get_tp_fsdp_trainer(
 def forward_pass(trainer):
     reproducibility.seed_all(trainer.state.seed)
     batch = next(iter(trainer.state.train_dataloader))
+    ic(batch)
     output = trainer.state.model.forward(batch)
     return output
 
@@ -361,6 +384,7 @@ def compare_models(
             ddp_params = _replace_state_dict_name(ddp_params, 'module.', '')
             fsdp_params = _replace_state_dict_name(fsdp_params, '_fsdp_wrapped_module.', '')
             tp_fsdp_params = _replace_state_dict_name(tp_fsdp_params, '_fsdp_wrapped_module.', '')
+            ic(ddp_params, fsdp_params, tp_fsdp_params)
 
             compare_modules(ddp_params, fsdp_params, check_grad=check_grad, atol=atol, rtol=rtol)
             compare_modules(tp_fsdp_params, fsdp_params, check_grad=check_grad, atol=atol, rtol=rtol)
@@ -394,9 +418,13 @@ def test_tp_forwards_backwards_correctness(world_size: int, replication: int):
     """
 
     # Initialize trainers with DDP, FSDP, TP-FSDP
-    ddp_trainer = get_ddp_trainer(replication=replication)
-    fsdp_trainer = get_fsdp_trainer(replication=replication)
+    ic('ddp trainer init')
+    ddp_trainer = get_ddp_trainer(replication=None if REPLICATE else replication)
+    ic('ddp trainer fin', 'fsdp trainer init')
+    fsdp_trainer = get_fsdp_trainer(replication=None if REPLICATE else replication)
+    ic('fsdp trainer fin, tp-fsdp trainer init')
     tp_fsdp_trainer = get_tp_fsdp_trainer(replication=replication)
+    ic('tp-fsdp trainer trainer fin')
 
     # Ensure initial model weights are the same
     compare_models(ddp_trainer, fsdp_trainer, tp_fsdp_trainer)
@@ -409,6 +437,7 @@ def test_tp_forwards_backwards_correctness(world_size: int, replication: int):
     # Ensure output of the forward pass is the same
     with FSDP.summon_full_params(fsdp_trainer.state.model):
         with FSDP.summon_full_params(tp_fsdp_trainer.state.model):
+            ic(ddp_out, fsdp_out, tp_fsdp_out)
             compare_modules({'': ddp_out}, {'': fsdp_out})
             compare_modules({'': ddp_out}, {'': tp_fsdp_out})
             compare_modules({'': fsdp_out}, {'': tp_fsdp_out})
@@ -678,7 +707,6 @@ def get_tp_fsdp_trainer2(
         device=device,
     )
 
-
     # clean directory
     if dist.get_local_rank() == 0:
         rmtree(output_dir)
@@ -707,7 +735,6 @@ def get_tp_fsdp_trainer2(
     for batch in dataloader:
         ic(batch)
 
-
     tp_fsdp_trainer2 = Trainer(
         seed=seed,
         device='gpu',
@@ -735,10 +762,8 @@ def get_tp_fsdp_trainer3(
     replication: int = 0,
     output_dir: str = '/my-tmp/',
 ):
-    from shutil import rmtree
 
     from icecream import ic
-    from streaming import MDSWriter, StreamingDataset
     from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel
 
     fsdp_config = FSDPConfig(
@@ -766,86 +791,16 @@ def get_tp_fsdp_trainer3(
 
     model = SimpleComposerMLP(num_features=num_features, device=device, num_classes=num_classes)
 
-    # dataset: Dataset = RandomClassificationDatasetReplicated(
-    #     shape=(num_features,),
-    #     num_classes=num_classes,
-    #     size=size,
-    #     device=device,
-    #     replication=replication,
-    # )  # X=(num_features,), y=(,), i.e. scalar
-
-    # dataloader = DataLoader(
-    #     dataset,
-    #     sampler=dist.get_sampler(dataset),
-    #     batch_size=batch_size,
-    # )  # X=(batch_size, num_features), y=(batch_size,)
-
-    pytorch_dataset = RandomClassificationDataset(
-        shape=(num_features,),
+    output_dir = '/my-tmp/'
+    dataloader = get_dataloader(
+        num_features=num_features,
         num_classes=num_classes,
         size=size,
         device=device,
-    )
-
-
-    # write data
-    if dist.get_local_rank() == 0:
-        rmtree(output_dir)
-        write_datasets(pytorch_dataset)
-
-    streaming_dataset = RandomClassificationStreamingDataset(
-        local=output_dir,
-        replication=replication,
         batch_size=batch_size,
+        output_dir=output_dir,
+        replication=replication,
     )
-
-    for i in range(streaming_dataset.num_samples):
-        ic(streaming_dataset[i])
-
-    dataloader = DataLoader(streaming_dataset)
-
-    for batch in dataloader:
-        ic(batch)
-
-
-
-    # pytorch_dataset = RandomClassificationDataset(
-    #     shape=(num_features,),
-    #     num_classes=num_classes,
-    #     size=size,
-    #     device=device,
-    # )
-
-
-    # # clean directory
-    # if dist.get_local_rank() == 0:
-    #     rmtree(output_dir)
-
-    #     # columns = {'x': 'ndarray:float32:2', 'y': 'int64'} # 2 -> features
-    #     columns = {'x': 'pkl', 'y': 'int64'}
-    #     with MDSWriter(out=output_dir, columns=columns) as out:
-    #         for i in range(len(pytorch_dataset)):
-    #             x, y = pytorch_dataset[i]
-    #             ic(x, y)
-    #             # out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
-    #             out.write({'x': x.numpy(), 'y': y.numpy()})
-
-    # streaming_dataset = StreamingDataset(
-    #     local=output_dir,
-    #     replication=replication,
-    #     batch_size=batch_size,
-    #     allow_unsafe_types=True,
-    # )
-
-    # for i in range(streaming_dataset.num_samples):
-    #     ic(streaming_dataset[i])
-
-    # dataloader = DataLoader(streaming_dataset)
-
-    # for batch in dataloader:
-        # ic(batch)
-
-
 
     tp_fsdp_trainer3 = Trainer(
         seed=seed,
@@ -863,24 +818,37 @@ def get_tp_fsdp_trainer3(
 
     return tp_fsdp_trainer3
 
+
 if __name__ == '__main__':
 
+    replication = 2
     world_size = 4
 
+    REPLICATE = 0
+    ic(REPLICATE, 'start')
+    test_tp_forwards_backwards_correctness(world_size, replication)
+    ic(REPLICATE, 'end')
+
+    REPLICATE = 1
+    ic(REPLICATE, 'start')
+    test_tp_forwards_backwards_correctness(world_size, replication)
+    ic(REPLICATE, 'end')
 
     # dataloader = get_dataloader(num_features=2, num_classes=2, size=32, device= torch.device('cpu'), batch_size = 1, output_dir = '/my-tmp/')
     # for batch in dataloader:
     #     ic(batch)
 
-    # test_tp_forwards_backwards_correctness(world_size, replication)
-    # ic('bf')
-
-    REPLICATE = 0
-    tp_fsdp_trainer = get_tp_fsdp_trainer(replication=2)
+    tp_fsdp_trainer = get_tp_fsdp_trainer(replication=replication)
     ic('tp-fsdp')
     tp_fsdp_trainer.fit()
     ic('tp-fsdp fit')
 
+    tp_fsdp_trainer3 = get_tp_fsdp_trainer3(replication=2)
+    ic('tp-fsdp3')
+    tp_fsdp_trainer3.fit()
+    ic('tp-fsdp3 fit')
+
+    # expect to fail
     tp_fsdp_trainer2 = get_tp_fsdp_trainer2(replication=2)
     ic('tp-fsdp2')
     tp_fsdp_trainer2.fit()
@@ -905,6 +873,3 @@ if __name__ == '__main__':
     # # ic('tp-fsdp-2')
     # # tp_fsdp_trainer2.fit()
     # # ic('tp-fsdp-2 fit')
-
-
-
