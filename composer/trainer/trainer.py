@@ -3851,6 +3851,8 @@ class Trainer:
                 if trainer_mode == TrainerMode.TRAIN:
                     self.engine.run_event(Event.BEFORE_DATALOADER)
                 batch = next(dataloader_iter)
+                print(f'{batch=}')
+                ic(batch)
             except StopIteration:
                 # [BEFORE/AFTER]_DATALOADER only runs while training
                 if trainer_mode == TrainerMode.TRAIN:

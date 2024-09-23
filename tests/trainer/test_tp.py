@@ -1,6 +1,8 @@
 # Copyright 2022 MosaicML Composer authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from shutil import rmtree
 from typing import Any, Optional, Sequence, TypeVar, Union
 
 E = TypeVar('E', bound=BaseException)
@@ -26,6 +28,16 @@ from tests.common import (
 )
 
 install()
+
+REPLICATE: bool = False
+
+def write_datasets(dataset: Dataset, output_dir: str) -> None:
+    from streaming import MDSWriter
+    columns = {'x': 'pkl', 'y': 'int64'}
+    with MDSWriter(out=output_dir, columns=columns) as out:
+        for i in range(len(dataset)):
+            x, y = dataset[i]
+            out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
 
 
 class RandomClassificationDatasetReplicated(Dataset):
@@ -78,6 +90,54 @@ class RandomClassificationDatasetReplicated(Dataset):
         return self.x[rank_idx], self.y[rank_idx]
 
 
+
+def get_dataloader(num_features: int, num_classes: int, size: int, device: torch.device, batch_size: int, output_dir: str, replication: Optional[int] = None):
+    """Create a random classification dataset that supports replication, a key feature needed for tensor parallelism.
+
+    A standard pytorch dataset does not support replication and cannot be properly used with tensor parallelism. We use a streaming dataset to support replication.
+    """
+
+    from streaming import StreamingDataset
+
+    class RandomClassificationStreamingDataset(StreamingDataset):
+        def __init__(self, local: str, batch_size: int, replication: Optional[int] = None) -> None:
+            super().__init__(
+                local=local,
+                batch_size=batch_size,
+                allow_unsafe_types=True,
+                replication=replication
+                )
+
+        def __getitem__(self, idx:int) -> Any:
+            obj = super().__getitem__(idx)
+            x = obj['x']
+            y = obj['y']
+            return x, y
+
+
+    pytorch_dataset = RandomClassificationDataset(
+        shape=(num_features,),
+        num_classes=num_classes,
+        size=size,
+        device=device,
+    )
+
+    # write dataset as MDS shards
+    if dist.get_local_rank() == 0:
+        if os.path.isdir(output_dir):
+            rmtree(output_dir)
+        write_datasets(pytorch_dataset, output_dir)
+
+    streaming_dataset = RandomClassificationStreamingDataset(
+        local=output_dir,
+        replication=replication,
+        batch_size=batch_size,
+    )
+
+    dataloader = DataLoader(streaming_dataset)
+    return dataloader
+
+
 def get_trainer(
     parallelism_config: Optional[ParallelismConfig] = None,
     size: int = 4,
@@ -94,19 +154,25 @@ def get_trainer(
     if isinstance(device, str):
         device = torch.device(device)
 
-    dataset: Dataset = RandomClassificationDatasetReplicated(
-        shape=(num_features,),
-        num_classes=num_classes,
-        size=size,
-        device=device,
-        replication=replication,
-    )  # X=(num_features,), y=(,), i.e. scalar
+    if REPLICATE:
+        ic('yes, replicate')
+        output_dir = '/my-tmp/'
+        dataloader = get_dataloader(num_features=num_features, num_classes=num_classes, size=size, device=device, batch_size=batch_size, output_dir=output_dir, replication=replication)
+    else:
+        ic('no replicate')
+        dataset: Dataset = RandomClassificationDatasetReplicated(
+            shape=(num_features,),
+            num_classes=num_classes,
+            size=size,
+            device=device,
+            replication=replication,
+        )  # X=(num_features,), y=(,), i.e. scalar
 
-    dataloader = DataLoader(
-        dataset,
-        sampler=dist.get_sampler(dataset),
-        batch_size=batch_size,
-    )  # X=(batch_size, num_features), y=(batch_size,)
+        dataloader = DataLoader(
+            dataset,
+            sampler=dist.get_sampler(dataset),
+            batch_size=batch_size,
+        )  # X=(batch_size, num_features), y=(batch_size,)
 
     model = SimpleComposerMLP(num_features=num_features, device=device, num_classes=num_classes)
 
@@ -134,7 +200,7 @@ def get_ddp_trainer(
     num_features: int = 2,
     seed: int = 44,
     device: Union[torch.device, str] = 'cuda',
-    replication: int = 0,
+    replication: Optional[int] = None,
 ):
     ddp_trainer = get_trainer(
         size=size,
@@ -155,7 +221,7 @@ def get_fsdp_trainer(
     num_features: int = 2,
     seed: int = 44,
     device: Union[torch.device, str] = 'cuda',
-    replication: int = 0,
+    replication: Optional[int] = None,
 ):
     fsdp_config = FSDPConfig(
         state_dict_type='full',
@@ -185,7 +251,7 @@ def get_tp_fsdp_trainer(
     num_features: int = 2,
     seed: int = 44,
     device: Union[torch.device, str] = 'cuda',
-    replication: int = 0,
+    replication: Optional[int] = None,
 ):
     from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel
 
@@ -605,6 +671,101 @@ def get_tp_fsdp_trainer2(
 
     model = SimpleComposerMLP(num_features=num_features, device=device, num_classes=num_classes)
 
+    pytorch_dataset = RandomClassificationDataset(
+        shape=(num_features,),
+        num_classes=num_classes,
+        size=size,
+        device=device,
+    )
+
+
+    # clean directory
+    if dist.get_local_rank() == 0:
+        rmtree(output_dir)
+
+        # columns = {'x': 'ndarray:float32:2', 'y': 'int64'} # 2 -> features
+        columns = {'x': 'pkl', 'y': 'int64'}
+        with MDSWriter(out=output_dir, columns=columns) as out:
+            for i in range(len(pytorch_dataset)):
+                x, y = pytorch_dataset[i]
+                ic(x, y)
+                # out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
+                out.write({'x': x.numpy(), 'y': y.numpy()})
+
+    streaming_dataset = StreamingDataset(
+        local=output_dir,
+        replication=replication,
+        batch_size=batch_size,
+        allow_unsafe_types=True,
+    )
+
+    for i in range(streaming_dataset.num_samples):
+        ic(streaming_dataset[i])
+
+    dataloader = DataLoader(streaming_dataset)
+
+    for batch in dataloader:
+        ic(batch)
+
+
+    tp_fsdp_trainer2 = Trainer(
+        seed=seed,
+        device='gpu',
+        model=model,
+        max_duration='1ep',
+        train_dataloader=dataloader,
+        precision='fp32',
+        parallelism_config=parallelism_config,
+        callbacks=[MemoryMonitor()],
+        loggers=[InMemoryLogger()],
+        progress_bar=False,
+        log_to_console=False,
+    )
+
+    return tp_fsdp_trainer2
+
+
+def get_tp_fsdp_trainer3(
+    size: int = 4,
+    batch_size: int = 1,
+    num_classes: int = 2,
+    num_features: int = 2,
+    seed: int = 44,
+    device: Union[torch.device, str] = 'cpu',
+    replication: int = 0,
+    output_dir: str = '/my-tmp/',
+):
+    from shutil import rmtree
+
+    from icecream import ic
+    from streaming import MDSWriter, StreamingDataset
+    from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel
+
+    fsdp_config = FSDPConfig(
+        state_dict_type='full',
+        sharding_strategy='SHARD_GRAD_OP',
+        mixed_precision='full',
+        use_orig_params=True,
+    )
+
+    layer_plan = {
+        'fc1': ColwiseParallel(),
+        'fc2': RowwiseParallel(),
+    }
+
+    tp_config = TPConfig(
+        layer_plan=layer_plan,
+        tensor_parallel_degree=replication,
+    )
+    parallelism_config = ParallelismConfig(fsdp=fsdp_config, tp=tp_config)
+
+    reproducibility.seed_all(seed)
+    if isinstance(device, str):
+        device = torch.device(device)
+    ic(device)
+
+    model = SimpleComposerMLP(num_features=num_features, device=device, num_classes=num_classes)
+
     # dataset: Dataset = RandomClassificationDatasetReplicated(
     #     shape=(num_features,),
     #     num_classes=num_classes,
@@ -626,34 +787,67 @@ def get_tp_fsdp_trainer2(
         device=device,
     )
 
-    # clean directory
+
+    # write data
     if dist.get_local_rank() == 0:
         rmtree(output_dir)
+        write_datasets(pytorch_dataset)
 
-        # columns = {'x': 'ndarray:float32:2', 'y': 'int64'} # 2 -> features
-        columns = {'x': 'pkl', 'y': 'int64'}
-        with MDSWriter(out=output_dir, columns=columns) as out:
-            for i in range(len(pytorch_dataset)):
-                x, y = pytorch_dataset[i]
-                # out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
-                out.write({'x': x.numpy(), 'y': y.numpy()})
-
-    streaming_dataset = StreamingDataset(
+    streaming_dataset = RandomClassificationStreamingDataset(
         local=output_dir,
         replication=replication,
         batch_size=batch_size,
-        allow_unsafe_types=True,
     )
 
     for i in range(streaming_dataset.num_samples):
-        x, y = streaming_dataset[i]
-        ic(x)
-        ic(y)
-        ic('\n')
+        ic(streaming_dataset[i])
 
     dataloader = DataLoader(streaming_dataset)
 
-    tp_fsdp_trainer = Trainer(
+    for batch in dataloader:
+        ic(batch)
+
+
+
+    # pytorch_dataset = RandomClassificationDataset(
+    #     shape=(num_features,),
+    #     num_classes=num_classes,
+    #     size=size,
+    #     device=device,
+    # )
+
+
+    # # clean directory
+    # if dist.get_local_rank() == 0:
+    #     rmtree(output_dir)
+
+    #     # columns = {'x': 'ndarray:float32:2', 'y': 'int64'} # 2 -> features
+    #     columns = {'x': 'pkl', 'y': 'int64'}
+    #     with MDSWriter(out=output_dir, columns=columns) as out:
+    #         for i in range(len(pytorch_dataset)):
+    #             x, y = pytorch_dataset[i]
+    #             ic(x, y)
+    #             # out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
+    #             out.write({'x': x.numpy(), 'y': y.numpy()})
+
+    # streaming_dataset = StreamingDataset(
+    #     local=output_dir,
+    #     replication=replication,
+    #     batch_size=batch_size,
+    #     allow_unsafe_types=True,
+    # )
+
+    # for i in range(streaming_dataset.num_samples):
+    #     ic(streaming_dataset[i])
+
+    # dataloader = DataLoader(streaming_dataset)
+
+    # for batch in dataloader:
+        # ic(batch)
+
+
+
+    tp_fsdp_trainer3 = Trainer(
         seed=seed,
         device='gpu',
         model=model,
@@ -667,24 +861,50 @@ def get_tp_fsdp_trainer2(
         log_to_console=False,
     )
 
-    return tp_fsdp_trainer
-
+    return tp_fsdp_trainer3
 
 if __name__ == '__main__':
 
-    replication = 2
     world_size = 4
 
-    test_tp_forwards_backwards_correctness(world_size, replication)
-    ic('bf')
 
-    ddp_trainer = get_ddp_trainer(replication=replication)
-    ic('ddp')
-    fsdp_trainer = get_fsdp_trainer(replication=replication)
-    ic('fsdp')
-    tp_fsdp_trainer = get_tp_fsdp_trainer(replication=replication)
+    # dataloader = get_dataloader(num_features=2, num_classes=2, size=32, device= torch.device('cpu'), batch_size = 1, output_dir = '/my-tmp/')
+    # for batch in dataloader:
+    #     ic(batch)
+
+    # test_tp_forwards_backwards_correctness(world_size, replication)
+    # ic('bf')
+
+    REPLICATE = 0
+    tp_fsdp_trainer = get_tp_fsdp_trainer(replication=2)
     ic('tp-fsdp')
-    tp_fsdp_trainer2 = get_tp_fsdp_trainer2(replication=replication)
-    ic('tp-fsdp-2')
+    tp_fsdp_trainer.fit()
+    ic('tp-fsdp fit')
+
+    tp_fsdp_trainer2 = get_tp_fsdp_trainer2(replication=2)
+    ic('tp-fsdp2')
     tp_fsdp_trainer2.fit()
-    ic('tp-fsdp-2 fit')
+    ic('tp-fsdp2 fit')
+
+    # ddp_trainer = get_ddp_trainer(replication=2 if not REPLICATE else None)
+    # ic('ddp')
+    # ddp_trainer.fit()
+    # ic('ddp-trainer-fit')
+    # fsdp_trainer = get_fsdp_trainer(replication=2 if not REPLICATE else None)
+    # ic('fsdp')
+    # fsdp_trainer.fit()
+    # ic('fsdp fit')
+    # tp_fsdp_trainer = get_tp_fsdp_trainer(replication=2)
+    # ic('tp-fsdp')
+
+    # tp_fsdp_trainer.fit()
+    # ic('tp-fsdp fit')
+    # # tp_fsdp_trainer.fit()
+    # # ic('tp-fsdp-fit')
+    # # tp_fsdp_trainer2 = get_tp_fsdp_trainer2(replication=replication)
+    # # ic('tp-fsdp-2')
+    # # tp_fsdp_trainer2.fit()
+    # # ic('tp-fsdp-2 fit')
+
+
+
