@@ -8,6 +8,7 @@ E = TypeVar('E', bound=BaseException)
 import numpy as np
 import pytest
 import torch
+from icecream import install
 from packaging import version
 from torch.distributed._tensor import DTensor, Replicate
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -23,6 +24,8 @@ from tests.common import (
     SimpleModel,
     world_size,
 )
+
+install()
 
 
 class RandomClassificationDatasetReplicated(Dataset):
@@ -561,8 +564,6 @@ def test_tp_fsdp_state_dict(world_size: int):
         compare_modules(tp_fsdp_state_dict1['model'], tp_fsdp_state_dict2['model'])
 
 
-
-
 def get_tp_fsdp_trainer2(
     size: int = 4,
     batch_size: int = 1,
@@ -574,8 +575,9 @@ def get_tp_fsdp_trainer2(
     output_dir: str = '/my-tmp/',
 ):
     from shutil import rmtree
-    from streaming import MDSWriter, StreamingDataset
+
     from icecream import ic
+    from streaming import MDSWriter, StreamingDataset
     from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel
 
     fsdp_config = FSDPConfig(
@@ -617,8 +619,6 @@ def get_tp_fsdp_trainer2(
     #     batch_size=batch_size,
     # )  # X=(batch_size, num_features), y=(batch_size,)
 
-
-
     pytorch_dataset = RandomClassificationDataset(
         shape=(num_features,),
         num_classes=num_classes,
@@ -627,21 +627,22 @@ def get_tp_fsdp_trainer2(
     )
 
     # clean directory
-    rmtree(output_dir)
+    if dist.get_local_rank() == 0:
+        rmtree(output_dir)
 
-    # columns = {'x': 'ndarray:float32:2', 'y': 'int64'} # 2 -> features
-    columns = {'x': 'pkl', 'y': 'int64'}
-    with MDSWriter(out=output_dir, columns=columns) as out:
-        for i in range(len(pytorch_dataset)):
-            x, y = pytorch_dataset[i]
-            # out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
-            out.write({'x': x.numpy(), 'y': y.numpy()})
+        # columns = {'x': 'ndarray:float32:2', 'y': 'int64'} # 2 -> features
+        columns = {'x': 'pkl', 'y': 'int64'}
+        with MDSWriter(out=output_dir, columns=columns) as out:
+            for i in range(len(pytorch_dataset)):
+                x, y = pytorch_dataset[i]
+                # out.write({'x': x.cpu().detach().numpy(), 'y': y.cpu().detach().numpy()})
+                out.write({'x': x.numpy(), 'y': y.numpy()})
 
     streaming_dataset = StreamingDataset(
         local=output_dir,
         replication=replication,
         batch_size=batch_size,
-        allow_unsafe_types=True
+        allow_unsafe_types=True,
     )
 
     for i in range(streaming_dataset.num_samples):
@@ -651,7 +652,6 @@ def get_tp_fsdp_trainer2(
         ic('\n')
 
     dataloader = DataLoader(streaming_dataset)
-
 
     tp_fsdp_trainer = Trainer(
         seed=seed,
@@ -673,6 +673,18 @@ def get_tp_fsdp_trainer2(
 if __name__ == '__main__':
 
     replication = 2
+    world_size = 4
+
+    test_tp_forwards_backwards_correctness(world_size, replication)
+    ic('bf')
+
     ddp_trainer = get_ddp_trainer(replication=replication)
-    tp_fsdp_trainer = get_tp_fsdp_trainer2(replication=replication)
-    tp_fsdp_trainer.fit()
+    ic('ddp')
+    fsdp_trainer = get_fsdp_trainer(replication=replication)
+    ic('fsdp')
+    tp_fsdp_trainer = get_tp_fsdp_trainer(replication=replication)
+    ic('tp-fsdp')
+    tp_fsdp_trainer2 = get_tp_fsdp_trainer2(replication=replication)
+    ic('tp-fsdp-2')
+    tp_fsdp_trainer2.fit()
+    ic('tp-fsdp-2 fit')

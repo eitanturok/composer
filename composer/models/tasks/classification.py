@@ -133,4 +133,5 @@ class ComposerClassifier(ComposerModel):
     def forward(self, batch: tuple[Tensor, Any]) -> Tensor:
         inputs, _ = batch
         outputs = self.module(inputs)
+        ic(inputs, outputs)
         return outputs
