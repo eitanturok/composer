@@ -2652,6 +2652,7 @@ class Trainer:
                 sampler.set_epoch(int(self.state.timestamp.epoch))
 
             for batch_idx, self.state.batch in enumerate(self._iter_dataloader(TrainerMode.TRAIN)):
+                ic(batch_idx, self.state.batch['input_ids'].shape, self.state.batch['input_ids'][:, :3])
                 # Spin dataloader forward unless dataloader handles internally with dataset_resumption
                 if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
                     self.state.timestamp.batch_in_epoch,

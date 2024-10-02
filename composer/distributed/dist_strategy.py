@@ -208,11 +208,13 @@ def prepare_tp_module(
 
     device_mesh = tp_config.device_mesh
     assert device_mesh is not None  # For type checking, set in State.__init__
+    ic(model)
     parallelize_module(
         module=model,
         device_mesh=device_mesh,
         parallelize_plan=tp_config.layer_plan,
     )
+    ic(model)
 
 
 def prepare_fsdp_module(
