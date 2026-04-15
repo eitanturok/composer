@@ -35,7 +35,7 @@ class HFObjectStore(ObjectStore):
         self,
         bucket: str,
         prefix: str = '',
-        repo_type: str = 'model',
+        repo_type: str = 'dataset',
         token: Optional[str] = None,
     ) -> None:
         try:
