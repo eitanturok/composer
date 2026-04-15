@@ -96,6 +96,9 @@ def _upload_file_to_object_store(
                     f'Object {remote_file_name} already exists, but overwrite was set to False. '
                     'Please set `save_overwrite` to `True` in Trainer to overwrite the existing file.',
                 )
+        import warnings
+        os.environ.setdefault('HF_HUB_DISABLE_PROGRESS_BARS', '1')
+        warnings.filterwarnings('ignore', category=UserWarning, module='huggingface_hub')
         print(f'[upload worker] uploading {local_file_path} → {remote_file_name} ...', flush=True)
         t0 = time.time()
         log.info(f'Uploading file {local_file_path} to {remote_file_name}')
