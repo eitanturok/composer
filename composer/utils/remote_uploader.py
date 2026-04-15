@@ -208,6 +208,17 @@ class RemoteUploader:
                 validate_credentials(self.remote_backend, '.credentials_validated_successfully')
 
             _validate_credential_with_retry()
+
+            # For HF, ensure the destination repo exists once in the main process
+            # so worker processes (which re-instantiate the backend) don't each
+            # make a redundant create_repo network call.
+            from composer.utils.object_store.hf_object_store import HFObjectStore
+            if isinstance(self.remote_backend, HFObjectStore):
+                self.remote_backend.api.create_repo(
+                    self.remote_backend.repo_id,
+                    repo_type=self.remote_backend.repo_type,
+                    exist_ok=True,
+                )
         if self.path.startswith(MLFLOW_DBFS_PATH_PREFIX):
             if get_global_rank() == 0:
                 assert isinstance(self.remote_backend, MLFlowObjectStore)

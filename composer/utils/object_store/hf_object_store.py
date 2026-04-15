@@ -51,7 +51,6 @@ class HFObjectStore(ObjectStore):
         self.repo_type = repo_type
         self.token = token or os.environ.get('HF_TOKEN')
         self.api = HfApi(token=self.token)
-        self.api.create_repo(self.repo_id, repo_type=self.repo_type, exist_ok=True)
 
     def _full_path(self, object_name: str) -> str:
         if self.prefix:
