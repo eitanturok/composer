@@ -6,6 +6,7 @@
 from typing import Any
 
 from composer.utils.object_store.gcs_object_store import GCSObjectStore
+from composer.utils.object_store.hf_object_store import HFObjectStore
 from composer.utils.object_store.libcloud_object_store import LibcloudObjectStore
 from composer.utils.object_store.mlflow_object_store import MLFLOW_DBFS_PATH_PREFIX, MLFlowObjectStore
 from composer.utils.object_store.oci_object_store import OCIObjectStore
@@ -25,6 +26,7 @@ def build_remote_backend(remote_backend_name: str, backend_kwargs: dict[str, Any
         'sftp': SFTPObjectStore,
         'libcloud': LibcloudObjectStore,
         'gs': GCSObjectStore,
+        'hf': HFObjectStore,
     }
 
     # Handle `dbfs` backend as a special case, since it can map to either :class:`.UCObjectStore`

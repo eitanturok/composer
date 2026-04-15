@@ -4,6 +4,7 @@
 """Object store base class and implementations."""
 
 from composer.utils.object_store.gcs_object_store import GCSObjectStore
+from composer.utils.object_store.hf_object_store import HFObjectStore
 from composer.utils.object_store.libcloud_object_store import LibcloudObjectStore
 from composer.utils.object_store.mlflow_object_store import (
     MLFLOW_EXPERIMENT_ID_FORMAT_KEY,
@@ -26,6 +27,7 @@ __all__ = [
     'SFTPObjectStore',
     'OCIObjectStore',
     'GCSObjectStore',
+    'HFObjectStore',
     'UCObjectStore',
     'MLFLOW_EXPERIMENT_ID_FORMAT_KEY',
     'MLFLOW_RUN_ID_FORMAT_KEY',

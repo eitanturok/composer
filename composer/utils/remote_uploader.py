@@ -150,6 +150,14 @@ class RemoteUploader:
                 'key_environ': 'AZURE_ACCOUNT_NAME',
                 'secret_environ': 'AZURE_ACCOUNT_ACCESS_KEY',
             }
+        elif self.remote_backend_name == 'hf':
+            # HF repo IDs are 'org/repo'. parse_uri puts 'org' in bucket_name
+            # and 'repo/subpath' in path, so reconstruct the full repo_id here.
+            parts = self.path.lstrip('/').split('/', 1)
+            repo_name = parts[0]
+            prefix = parts[1] if len(parts) > 1 else ''
+            self.backend_kwargs['bucket'] = f'{self.remote_bucket_name}/{repo_name}'
+            self.backend_kwargs['prefix'] = prefix
         elif self.remote_backend_name == 'dbfs':
             self.backend_kwargs['path'] = self.path
         elif self.remote_backend_name == 'wandb':

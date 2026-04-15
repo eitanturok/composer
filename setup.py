@@ -211,6 +211,10 @@ extra_deps['gcs'] = [
     'google-cloud-storage>=2.0.0,<4.0',
 ]
 
+extra_deps['hf'] = [
+    'huggingface_hub>=0.20',
+]
+
 extra_deps['onnx'] = [
     'onnx>=1.12.0,<2',
     'onnxruntime>=1.12.1,<2',
