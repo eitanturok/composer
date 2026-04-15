@@ -96,12 +96,15 @@ def _upload_file_to_object_store(
                     f'Object {remote_file_name} already exists, but overwrite was set to False. '
                     'Please set `save_overwrite` to `True` in Trainer to overwrite the existing file.',
                 )
+        print(f'[upload worker] uploading {local_file_path} → {remote_file_name} ...', flush=True)
+        t0 = time.time()
         log.info(f'Uploading file {local_file_path} to {remote_file_name}')
         object_store.upload_object(
             object_name=remote_file_name,
             filename=local_file_path,
         )
         os.remove(local_file_path)
+        print(f'[upload worker] upload done in {time.time()-t0:.1f}s → {remote_file_name}', flush=True)
 
     log.info(f'Finished uploading file {local_file_path} to {remote_file_name}')
     # When encountering issues with too much concurrency in uploads, staggering the uploads can help.

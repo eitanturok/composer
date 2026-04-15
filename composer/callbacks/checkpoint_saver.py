@@ -442,12 +442,15 @@ class CheckpointSaver(Callback):  # noqa: D101
         # Store before saving so state_dict in checkpoint has reference to latest checkpoint (itself)
         self.all_saved_checkpoints_to_timestamp[save_filename] = state.timestamp
 
+        print(f'[checkpoint] epoch={state.timestamp.epoch} | saving checkpoint locally...', flush=True)
+        t0 = time.time()
         saved_path = checkpoint.save_checkpoint(
             state=state,
             filename=filename_with_placeholders,
             weights_only=self.weights_only,
             ignore_keys=self.ignore_keys,
         )
+        print(f'[checkpoint] epoch={state.timestamp.epoch} | local save done in {time.time()-t0:.1f}s → {saved_path}', flush=True)
         log.debug(f'Checkpoint locally saved to {saved_path}')
 
         self.symlink_count += 1
@@ -516,6 +519,7 @@ class CheckpointSaver(Callback):  # noqa: D101
                 remote_file_name = self.remote_file_name.format(state).lstrip('/')
 
             log.debug(f'Uploading checkpoint to {remote_file_name}')
+            print(f'[checkpoint] epoch={state.timestamp.epoch} | queuing async upload → {remote_file_name} (training resumes immediately after this)', flush=True)
             try:
                 self._upload_checkpoint(
                     remote_file_name=remote_file_name,
@@ -623,7 +627,10 @@ class CheckpointSaver(Callback):  # noqa: D101
         if self.remote_uploader is None:
             return
         log.info('Waiting for checkpoint uploading to finish')
+        print('[checkpoint] fit_end: BLOCKING — waiting for all in-flight uploads to finish...', flush=True)
+        t0 = time.time()
         self.remote_uploader.wait()
+        print(f'[checkpoint] fit_end: all uploads finished in {time.time()-t0:.1f}s', flush=True)
         if self.rank_saves_symlinks and len(self.symlink_upload_tasks) > 0:
             log.debug('Uploading symlink to the latest checkpoint')
             # We only need to upload a symlink pointing to the latest checkpoint files, so we can ignore successful uploads of older checkpoints.
