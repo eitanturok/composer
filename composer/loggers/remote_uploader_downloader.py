@@ -11,6 +11,7 @@ import os
 import pathlib
 import queue
 import shutil
+from sys import prefix
 import tempfile
 import threading
 import time
@@ -230,6 +231,12 @@ class RemoteUploaderDownloader(LoggerDestination):
             self.backend_kwargs['host'] = f'sftp://{self.remote_bucket_name}'
         elif self.remote_backend_name == 'libcloud' and 'container' not in self.backend_kwargs:
             self.backend_kwargs['container'] = self.remote_bucket_name
+        elif self.remote_backend_name == 'hf':
+            parts = parsed_remote_bucket.path.lstrip('/').split('/', 1)
+            repo_name = parts[0]
+            prefix = parts[1] if len(parts) > 1 else ''
+            self.backend_kwargs['bucket'] = f'{self.remote_bucket_name}/{repo_name}'
+            self.backend_kwargs['prefix'] = prefix
 
         self.file_path_format_string = file_path_format_string
         self.num_attempts = num_attempts
