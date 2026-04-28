@@ -502,6 +502,8 @@ def maybe_create_remote_uploader_downloader_from_uri(
             return None
     if backend in ['s3', 'oci', 'gs']:
         return RemoteUploaderDownloader(bucket_uri=f'{backend}://{bucket_name}')
+    elif backend == 'hf':
+        return RemoteUploaderDownloader(bucket_uri=uri)
     elif backend == 'azure':
         return RemoteUploaderDownloader(
             bucket_uri=f'libcloud://{bucket_name}',
