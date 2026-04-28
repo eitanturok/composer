@@ -260,10 +260,21 @@ class SpeedMonitor(Callback):
         time_unit: str = 'hours',
     ):
         # Track the batch num samples and wct to compute throughput over a window of batches
-        self.history_samples: deque[int] = deque(maxlen=window_size + 1)
-        self.history_tokens: deque[int] = deque(maxlen=window_size + 1)
-        self.history_wct: deque[float] = deque(maxlen=window_size + 1)
-        self.history_flops: deque[float] = deque(maxlen=window_size + 1)
+        # Track seperately for train, eval, and total
+        self.train_history_samples: deque[int] = deque(maxlen=window_size + 1)
+        self.train_history_tokens: deque[int] = deque(maxlen=window_size + 1)
+        self.train_history_wct: deque[float] = deque(maxlen=window_size + 1)
+        self.train_history_flops: deque[float] = deque(maxlen=window_size + 1)
+
+        self.eval_history_samples: deque[int] = deque(maxlen=window_size + 1)
+        self.eval_history_tokens: deque[int] = deque(maxlen=window_size + 1)
+        self.eval_history_wct: deque[float] = deque(maxlen=window_size + 1)
+        self.eval_history_flops: deque[float] = deque(maxlen=window_size + 1)
+
+        self.total_history_samples: deque[int] = deque(maxlen=window_size + 1)
+        self.total_history_tokens: deque[int] = deque(maxlen=window_size + 1)
+        self.total_history_wct: deque[float] = deque(maxlen=window_size + 1)
+        self.total_history_flops: deque[float] = deque(maxlen=window_size + 1)
 
         self.gpu_flops_available = gpu_flops_available
 
@@ -281,53 +292,55 @@ class SpeedMonitor(Callback):
                 f'Invalid time_unit: {time_unit}. Must be one of "seconds", "minutes", "hours", or "days".',
             )
 
-        # Keep track of time spent evaluating
-        self.total_eval_wct = 0.0
+        # eval_timestep is reset after every evaluation so we must track the cumulative statistics across
+        # all the evaluations
+        self.cumulative_eval_samples = 0.0
+        self.cumulative_eval_tokens = 0.0
+        self.cumulative_eval_wct = 0.0
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            'total_eval_wct': self.total_eval_wct,
+            'cumulative_eval_samples': self.cumulative_eval_samples,
+            'cumulative_eval_tokens':  self.cumulative_eval_tokens,
+            'cumulative_eval_wct': self.cumulative_eval_wct,
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
-        self.total_eval_wct = state['total_eval_wct']
+        self.cumulative_eval_samples = state['cumulative_eval_samples']
+        self.cumulative_eval_tokens = state['cumulative_eval_tokens']
+        self.cumulative_eval_wct = state['cumulative_eval_wct']
 
     def init(self, state: State, logger: Logger) -> None:
         del logger  # unused
         if self.gpu_flops_available is None:
             self.gpu_flops_available = get_gpu_flops_available(state)
 
-    def batch_end(self, state: State, logger: Logger):
-        # Add the new element
-        self.history_samples.append(state.timestamp.sample.value)
-        self.history_tokens.append(state.timestamp.token.value)
-        self.history_wct.append(state.timestamp.total_wct.total_seconds())
-
-        # Log the throughput
-        if len(self.history_wct) == self.history_wct.maxlen:
+    def _log_throughput(self, logger: Logger, history_samples: deque[int], history_tokens: deque[int], history_wct: deque[float], mode: str):
+        if len(history_wct) == history_wct.maxlen:
             world_size = dist.get_world_size()
-            elapsed_batches = len(self.history_samples) - 1
-            elapsed_samples = int(self.history_samples[-1]) - int(self.history_samples[0])
-            elapsed_tokens = int(self.history_tokens[-1]) - int(self.history_tokens[0])
-            elapsed_wct = self.history_wct[-1] - self.history_wct[0]
+            elapsed_batches = len(history_samples) - 1
+            elapsed_samples = int(history_samples[-1]) - int(history_samples[0])
+            elapsed_tokens = int(history_tokens[-1]) - int(history_tokens[0])
+            elapsed_wct = history_wct[-1] - history_wct[0]
             batches_per_sec = elapsed_batches / elapsed_wct
             samples_per_sec = elapsed_samples / elapsed_wct
             dev_batches_per_sec = batches_per_sec / world_size
             dev_samples_per_sec = samples_per_sec / world_size
             logger.log_metrics({
-                'throughput/batches_per_sec': batches_per_sec,
-                'throughput/samples_per_sec': samples_per_sec,
-                'throughput/device/batches_per_sec': dev_batches_per_sec,
-                'throughput/device/samples_per_sec': dev_samples_per_sec,
+                f'throughput/{mode}/batches_per_sec': batches_per_sec,
+                f'throughput/{mode}/samples_per_sec': samples_per_sec,
+                f'throughput/{mode}/device/batches_per_sec': dev_batches_per_sec,
+                f'throughput/{mode}/device/samples_per_sec': dev_samples_per_sec,
             })
             if elapsed_tokens > 0:
                 tokens_per_sec = elapsed_tokens / elapsed_wct
                 dev_tokens_per_sec = tokens_per_sec / world_size
                 logger.log_metrics({
-                    'throughput/tokens_per_sec': tokens_per_sec,
-                    'throughput/device/tokens_per_sec': dev_tokens_per_sec,
+                    f'throughput/{mode}/tokens_per_sec': tokens_per_sec,
+                    f'throughput/{mode}/device/tokens_per_sec': dev_tokens_per_sec,
                 })
 
+    def _get_flops_per_batch(self, state: State):
         # Compute flops stats if model has flops_per_batch
         composer_model = state.model
         if not isinstance(composer_model, ComposerModel):
@@ -348,32 +361,89 @@ class SpeedMonitor(Callback):
             dist.all_reduce(flops_per_batch_tensor, reduce_operation='SUM')
             flops_per_batch = flops_per_batch_tensor.item()
 
-            self.history_flops.append(flops_per_batch)
+            return flops_per_batch
+
+    def _log_flops(self, logger: Logger, history_flops: deque[float], history_wct: deque[float], mode:str):
 
         # Log the flops throughput
-        if len(self.history_flops) == self.history_flops.maxlen:
+        if len(history_flops) == history_flops.maxlen:
             world_size = dist.get_world_size()
-            elapsed_flops = sum(self.history_flops) - self.history_flops[0]
-            elapsed_wct = self.history_wct[-1] - self.history_wct[0]
+            elapsed_flops = sum(history_flops) - history_flops[0]
+            elapsed_wct = history_wct[-1] - history_wct[0]
             flops_per_sec = elapsed_flops / elapsed_wct
             device_flops_per_sec = flops_per_sec / world_size
             logger.log_metrics({
-                'throughput/flops_per_sec': flops_per_sec,
-                'throughput/device/flops_per_sec': device_flops_per_sec,
+                f'throughput/{mode}/flops_per_sec': flops_per_sec,
+                f'throughput/{mode}/device/flops_per_sec': device_flops_per_sec,
             })
             if self.gpu_flops_available:
                 mfu = device_flops_per_sec / self.gpu_flops_available
-                logger.log_metrics({'throughput/device/mfu': mfu})
+                logger.log_metrics({f'throughput/{mode}/device/mfu': mfu})
+
+
+    def batch_end(self, state: State, logger: Logger):
+        # Add the new element
+        self.train_history_samples.append(state.timestamp.sample.value)
+        self.train_history_tokens.append(state.timestamp.token.value)
+        self.train_history_wct.append(state.timestamp.total_wct.total_seconds())
+
+        # Update total history
+        self.total_history_samples.append(state.timestamp.sample.value + state.eval_timestamp.sample.value + self.cumulative_eval_samples)
+        self.total_history_tokens.append(state.timestamp.token.value + state.eval_timestamp.token.value + self.cumulative_eval_tokens)
+        self.total_history_wct.append(state.timestamp.total_wct.total_seconds() + state.eval_timestamp.total_wct.total_seconds() + self.cumulative_eval_wct)
+
+        # Log the throughput
+        self._log_throughput(logger, self.train_history_samples, self.train_history_tokens, self.train_history_wct, mode='train')
+        self._log_throughput(logger, self.total_history_samples, self.total_history_tokens, self.total_history_wct, mode='total')
+
+        # Log the flops and MFU
+        flops_per_batch = self._get_flops_per_batch(state)
+        if flops_per_batch is not None:
+            self.train_history_flops.append(flops_per_batch)
+            self.total_history_flops.append(flops_per_batch)
+            self._log_flops(logger, self.train_history_flops, self.train_history_wct, mode='train')
+            self._log_flops(logger, self.total_history_flops, self.total_history_wct, mode='total')
 
         # Log the time
         # `state.timestamp` excludes any time spent in evaluation
-        train_wct = state.timestamp.total_wct.total_seconds()
         logger.log_metrics({
-            'time/train': train_wct / self.divider,
-            'time/val': self.total_eval_wct / self.divider,
-            'time/total': (train_wct + self.total_eval_wct) / self.divider,
+            'time/train': self.train_history_wct[-1] / self.divider,
+            'time/total' :self.total_history_wct[-1] / self.divider,
         })
+
+    def eval_batch_end(self, state: State, logger: Logger):
+        # Add the new element
+        self.eval_history_samples.append(state.eval_timestamp.sample.value + self.cumulative_eval_samples)
+        self.eval_history_tokens.append(state.eval_timestamp.token.value + self.cumulative_eval_tokens)
+        self.eval_history_wct.append(state.eval_timestamp.total_wct.total_seconds() + self.cumulative_eval_wct)
+
+        # Update total history
+        self.total_history_samples.append(state.timestamp.sample.value + state.eval_timestamp.sample.value + self.cumulative_eval_samples)
+        self.total_history_tokens.append(state.timestamp.token.value + state.eval_timestamp.token.value + self.cumulative_eval_tokens)
+        self.total_history_wct.append(state.timestamp.total_wct.total_seconds() + state.eval_timestamp.total_wct.total_seconds() + self.cumulative_eval_wct)
+
+        # Log the throughput
+        self._log_throughput(logger, self.eval_history_samples, self.eval_history_tokens, self.eval_history_wct, mode='eval')
+        self._log_throughput(logger, self.total_history_samples, self.total_history_tokens, self.total_history_wct, mode='total')
+
+        # Log the flops and MFU
+        flops_per_batch = self._get_flops_per_batch(state)
+        if flops_per_batch is not None:
+            self.eval_history_flops.append(flops_per_batch)
+            self.total_history_flops.append(flops_per_batch)
+            self._log_flops(logger, self.eval_history_flops, self.eval_history_wct, mode='eval')
+            self._log_flops(logger, self.total_history_flops, self.total_history_wct, mode='total')
+
+        # Log the time
+        # `state.timestamp` excludes any time spent in evaluation
+        logger.log_metrics({
+            'time/val': self.eval_history_wct[-1] / self.divider,
+            'time/total': self.total_history_wct[-1] / self.divider,
+        })
+
 
     def eval_end(self, state: State, logger: Logger):
         del logger  # unused
-        self.total_eval_wct += state.eval_timestamp.total_wct.total_seconds()
+        self.cumulative_eval_samples += state.eval_timestamp.sample.value
+        self.cumulative_eval_tokens += state.eval_timestamp.token.value
+        self.cumulative_eval_wct += state.eval_timestamp.total_wct.total_seconds()
