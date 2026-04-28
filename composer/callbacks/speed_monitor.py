@@ -292,23 +292,33 @@ class SpeedMonitor(Callback):
                 f'Invalid time_unit: {time_unit}. Must be one of "seconds", "minutes", "hours", or "days".',
             )
 
-        # eval_timestep is reset after every evaluation so we must track the cumulative statistics across
-        # all the evaluations
+        # eval_timestep is reset after every evaluation so we must track the cumulative statistics across all the evaluations
         self.cumulative_eval_samples = 0.0
         self.cumulative_eval_tokens = 0.0
         self.cumulative_eval_wct = 0.0
 
+        # state does not explictly track flops so we do it here
+        self.cumulative_train_flops = 0.0
+        self.cumulative_eval_flops = 0.0
+        self.cumulative_total_flops = 0.0
+
     def state_dict(self) -> dict[str, Any]:
         return {
             'cumulative_eval_samples': self.cumulative_eval_samples,
-            'cumulative_eval_tokens':  self.cumulative_eval_tokens,
+            'cumulative_eval_tokens': self.cumulative_eval_tokens,
             'cumulative_eval_wct': self.cumulative_eval_wct,
+            'cumulative_train_flops': self.cumulative_train_flops,
+            'cumulative_eval_flops': self.cumulative_eval_flops,
+            'cumulative_total_flops': self.cumulative_total_flops,
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
         self.cumulative_eval_samples = state['cumulative_eval_samples']
         self.cumulative_eval_tokens = state['cumulative_eval_tokens']
         self.cumulative_eval_wct = state['cumulative_eval_wct']
+        self.cumulative_train_flops = state['cumulative_train_flops']
+        self.cumulative_eval_flops = state['cumulative_eval_flops']
+        self.cumulative_total_flops = state['cumulative_total_flops']
 
     def init(self, state: State, logger: Logger) -> None:
         del logger  # unused
@@ -368,7 +378,7 @@ class SpeedMonitor(Callback):
         # Log the flops throughput
         if len(history_flops) == history_flops.maxlen:
             world_size = dist.get_world_size()
-            elapsed_flops = sum(history_flops) - history_flops[0]
+            elapsed_flops = history_flops[-1] - history_flops[0]
             elapsed_wct = history_wct[-1] - history_wct[0]
             flops_per_sec = elapsed_flops / elapsed_wct
             device_flops_per_sec = flops_per_sec / world_size
@@ -399,8 +409,10 @@ class SpeedMonitor(Callback):
         # Log the flops and MFU
         flops_per_batch = self._get_flops_per_batch(state)
         if flops_per_batch is not None:
-            self.train_history_flops.append(flops_per_batch)
-            self.total_history_flops.append(flops_per_batch)
+            self.cumulative_train_flops += flops_per_batch
+            self.cumulative_total_flops += flops_per_batch
+            self.train_history_flops.append(self.cumulative_train_flops)
+            self.total_history_flops.append(self.cumulative_total_flops)
             self._log_flops(logger, self.train_history_flops, self.train_history_wct, mode='train')
             self._log_flops(logger, self.total_history_flops, self.total_history_wct, mode='total')
 
@@ -429,8 +441,10 @@ class SpeedMonitor(Callback):
         # Log the flops and MFU
         flops_per_batch = self._get_flops_per_batch(state)
         if flops_per_batch is not None:
-            self.eval_history_flops.append(flops_per_batch)
-            self.total_history_flops.append(flops_per_batch)
+            self.cumulative_eval_flops += flops_per_batch
+            self.cumulative_total_flops += flops_per_batch
+            self.eval_history_flops.append(self.cumulative_eval_flops)
+            self.total_history_flops.append(self.cumulative_total_flops)
             self._log_flops(logger, self.eval_history_flops, self.eval_history_wct, mode='eval')
             self._log_flops(logger, self.total_history_flops, self.total_history_wct, mode='total')
 
