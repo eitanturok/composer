@@ -390,6 +390,12 @@ def parse_uri(uri: str) -> tuple[str, str, str]:
     if backend == '':
         return backend, bucket_name, path
     else:
+        if backend == 'hf':
+            # for hf, bucket_name is {user_or_org}/{repo_name} and path is the rest of the repo path
+            parts = path.lstrip('/').split('/', 1)
+            repo_name = parts[0]
+            bucket_name = f'{bucket_name}/{repo_name}'
+            path = parts[1] if len(parts) > 1 else ''
         return backend, bucket_name, path.lstrip('/')
 
 
@@ -503,8 +509,7 @@ def maybe_create_remote_uploader_downloader_from_uri(
     if backend in ['s3', 'oci', 'gs']:
         return RemoteUploaderDownloader(bucket_uri=f'{backend}://{bucket_name}')
     elif backend == 'hf':
-        print(f'{uri=}, {backend=} {bucket_name=} {path=}')
-        return RemoteUploaderDownloader(bucket_uri=uri)
+        return RemoteUploaderDownloader(bucket_uri=f'hf://{bucket_name}')
     elif backend == 'azure':
         return RemoteUploaderDownloader(
             bucket_uri=f'libcloud://{bucket_name}',

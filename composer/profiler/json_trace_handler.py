@@ -349,7 +349,7 @@ class JSONTraceHandler(TraceHandler):  # noqa: D101
                     )
                     logger.upload_file(
                         remote_file_name=merged_trace_remote_file_name,
-                        file_path=merged_trace_remote_file_name,
+                        file_path=merged_trace_filename,
                         overwrite=True,
                     )
 
