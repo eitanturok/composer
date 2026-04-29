@@ -29,6 +29,7 @@ from composer.utils.object_store import (
     OCIObjectStore,
     S3ObjectStore,
     UCObjectStore,
+    HFObjectStore,
 )
 from composer.utils.object_store.mlflow_object_store import MLFLOW_DBFS_PATH_PREFIX
 
@@ -414,6 +415,7 @@ BACKEND_TO_OBJECT_STORE_FACTORY: dict[str, Callable[[str, str], ObjectStore]] = 
             key_environ='AZURE_ACCOUNT_NAME',
             secret_environ='AZURE_ACCOUNT_ACCESS_KEY',
         ),
+    'hf': lambda bucket, path: HFObjectStore(bucket=bucket, prefix=path),
 }
 
 
