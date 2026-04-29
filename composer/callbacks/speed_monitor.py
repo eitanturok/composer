@@ -115,11 +115,13 @@ GPU_AVAILABLE_FLOPS = {
 
 def get_gpu_flops_available(state: State):
     gpu_flops_available = None
+    print('running get_gpu_flops_available')
 
     # Return 0 if no CUDA device (e.g., when running with CPU only)
     if torch.cuda.is_available():
         # torch.cuda.get_device_name() ex output: 'NVIDIA A100-SXM4-40GB'
         device_name = torch.cuda.get_device_name().lower()
+        print(f'{device_name=}')
         if 'h200' in device_name:
             # We just assume SXM because device name does not differentiate, and we would have to check
             # power or bandwidth or something.
@@ -321,6 +323,7 @@ class SpeedMonitor(Callback):
         self.cumulative_total_flops = state['cumulative_total_flops']
 
     def init(self, state: State, logger: Logger) -> None:
+        print('running SpeedMonitor init')
         del logger  # unused
         if self.gpu_flops_available is None:
             self.gpu_flops_available = get_gpu_flops_available(state)
