@@ -503,6 +503,7 @@ def maybe_create_remote_uploader_downloader_from_uri(
     if backend in ['s3', 'oci', 'gs']:
         return RemoteUploaderDownloader(bucket_uri=f'{backend}://{bucket_name}')
     elif backend == 'hf':
+        print(f'{uri=}, {backend=} {bucket_name=} {path=}')
         return RemoteUploaderDownloader(bucket_uri=uri)
     elif backend == 'azure':
         return RemoteUploaderDownloader(
