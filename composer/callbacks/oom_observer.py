@@ -128,9 +128,6 @@ class OOMObserver(Callback):
             self._enabled = False
         else:
             self.folder_name = format_name_with_dist(self.folder, state.run_name)
-            os.makedirs(self.folder_name, exist_ok=True)
-            if not self.overwrite:
-                ensure_folder_is_empty(self.folder_name)
 
         def oom_observer(device: int, alloc: int, device_alloc: int, device_free: int):
             # Snapshot right after an OOM happened
@@ -138,6 +135,10 @@ class OOMObserver(Callback):
 
             assert self.filename
             assert self.folder_name, 'folder_name must be set in init'
+            # Only create the trace folder once an OOM actually occurs, instead of eagerly on init.
+            os.makedirs(self.folder_name, exist_ok=True)
+            if not self.overwrite:
+                ensure_folder_is_empty(self.folder_name)
             filename = Path(self.folder_name) / Path(
                 format_name_with_dist_and_time(self.filename, run_name=state.run_name, timestamp=state.timestamp),
             )
